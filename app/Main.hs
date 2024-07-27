@@ -7,7 +7,11 @@ matchPattern :: String -> String -> Bool
 matchPattern pattern input = do
   if length pattern == 1
     then head pattern `elem` input
-    else error $ "Unhandled pattern: " ++ pattern
+  else if pattern == "\\d"
+    then any (\c -> elem c input) "0123456789"
+  else error $ "Unhandled pattern: " ++ pattern
+
+
 
 main :: IO ()
 main = do
