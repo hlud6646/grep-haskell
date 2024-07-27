@@ -1,5 +1,6 @@
 module Main where
 
+import Data.Char (isDigit)
 import System.Environment
 import System.Exit
 
@@ -7,7 +8,7 @@ matchPattern :: String -> String -> Bool
 matchPattern pattern input
   | length pattern == 1 = head pattern `elem` input
   | pattern == "\\d" = any isDigit input
-  | otherwise error $ "Unhandled pattern: " ++ pattern
+  | otherwise = error $ "Unhandled pattern: " ++ pattern
 
 main :: IO ()
 main = do
