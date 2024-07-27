@@ -4,13 +4,10 @@ import System.Environment
 import System.Exit
 
 matchPattern :: String -> String -> Bool
-matchPattern pattern input = do
-  if length pattern == 1
-    then head pattern `elem` input
-    else
-      if pattern == "\\d"
-        then any isDigit input
-        else error $ "Unhandled pattern: " ++ pattern
+matchPattern pattern input
+  | length pattern == 1 = head pattern `elem` input
+  | pattern == "\\d" = any isDigit input
+  | otherwise error $ "Unhandled pattern: " ++ pattern
 
 main :: IO ()
 main = do
