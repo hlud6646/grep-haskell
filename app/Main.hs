@@ -2,9 +2,12 @@ module Main where
 
 import Control.Applicative
 import Data.Char
-import Data.List (tails)
+import Data.List (tails, singleton)
 import System.Environment
 import System.Exit
+
+-- TODO: Remove deriving (Show) when complete.
+-- TODO: Use megaparsec.
 
 --
 ------------------------------------------------------------------------------------------------
@@ -51,16 +54,21 @@ instance Alternative Parser where
   empty = Parser (const Nothing)
   (<|>) (Parser f) (Parser g) = Parser (liftA2 (<|>) f g)
 
+zeroOrOne :: Parser a -> Parser [a]
+zeroOrOne p = (singleton <$> p) <|> pure []
+
 zeroOrMore :: Parser a -> Parser [a]
 zeroOrMore p = oneOrMore p <|> pure []
 
 oneOrMore :: Parser a -> Parser [a]
 oneOrMore p = (:) <$> p <*> zeroOrMore p
 
+
+
 --
 ------------------------------------------------------------------------------------------------
 -- Data types for regex elements. I have no idea what I'm doing with this, so hopefully it
--- generalises well enough.
+-- generalises well enough to back references etc. 
 --
 -- The special characters in our regex program are \d, \w, ^, $, [], +, *, . and |
 
@@ -75,9 +83,19 @@ data CharClass
   | NegCharClass [Char]
   deriving (Show)
 
+data Anchor
+  = StartOfLine
+  | EndOfLine
+  deriving (Show)
+
 data Matchable = E Element 
                | C CharClass
+               | A Anchor
   deriving (Show)
+
+-- 
+------------------------------------------------------------------------------------------------
+-- Parsers for regex. Look how compact applicative parsing can be.
 
 nonSpecial :: Parser Char
 nonSpecial = satisfy (\c -> c `notElem` "[]^$")
@@ -97,20 +115,27 @@ posCharClass =  (C . PosCharClass) <$> (char '[' *> oneOrMore nonSpecial <* char
 negCharClass :: Parser Matchable
 negCharClass = (C . NegCharClass) <$> (char '[' *> char '^' *> oneOrMore nonSpecial <* char ']')
 
+startOfLine :: Parser Matchable
+startOfLine = (A . \_ -> StartOfLine) <$> char '^'
+
 --
 ------------------------------------------------------------------------------------------------
 -- Main bit.
 
 regex :: Parser [Matchable]
 regex =
-  oneOrMore
+  (++) <$> (zeroOrOne startOfLine) <*>
+  zeroOrMore
     (  alphanumeric
         <|> digit
         <|> posCharClass
         <|> negCharClass
         <|> literal
-        )
+    )
 
+-- What happens if there are unparsed characters? 
+-- This probably means that the parsing is not implemented properly, but maybe maybe we need to 
+-- check here and return Nothing if there is something left?
 parsePattern :: String -> Maybe [Matchable]
 parsePattern pattern = fst <$> runParser regex pattern
 
@@ -122,18 +147,39 @@ consume (C (PosCharClass chars)) c = c `elem` chars
 consume (C (NegCharClass chars)) c = c `notElem` chars
 
 consumeAll :: [Matchable] -> String -> Bool
--- The empty pattern always matches.
 consumeAll [] _ = True
--- A line here for the base case grep -e "^" ""
--- that is matching the start line or end line against the empty string...
--- Matching a pattern (assuming it's not the line start or end) against a non empty string will fail.
 consumeAll e "" = False
 consumeAll (e : ex) (s : sx) = consume e s && consumeAll ex sx
 
+
+
+
+
+
+
+
+
+
 matchPattern :: String -> String -> Bool
 matchPattern pattern input = case parsePattern pattern of
+  Just (A StartOfLine : matchables) -> consumeAll matchables input 
   Just elements -> any (consumeAll elements) (tails input)
   Nothing -> error $ "Unhandled Pattern: " ++ pattern
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 main :: IO ()
 main = do
