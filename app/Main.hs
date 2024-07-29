@@ -67,10 +67,7 @@ oneOrMore p = (:) <$> p <*> zeroOrMore p
 
 --
 ------------------------------------------------------------------------------------------------
--- Data types for regex elements. I have no idea what I'm doing with this, so hopefully it
--- generalises well enough to back references etc. 
 --
--- The special characters in our regex program are \d, \w, ^, $, [], +, *, . and |
 
 data Element
   = Literal Char
@@ -88,9 +85,15 @@ data Anchor
   | EndOfLine
   deriving (Show)
 
+data Quantifier
+  = OneOrMore
+  | ZeroOrOne
+  deriving (Show)
+
 data Matchable = E Element 
                | C CharClass
                | A Anchor
+               | Q Quantifier
   deriving (Show)
 
 -- 
@@ -98,7 +101,7 @@ data Matchable = E Element
 -- Parsers for regex. Look how compact applicative parsing can be.
 
 nonSpecial :: Parser Char
-nonSpecial = satisfy (\c -> c `notElem` "[]^$")
+nonSpecial = satisfy (\c -> c `notElem` "[]^$+?")
 
 literal :: Parser Matchable
 literal =  (E . Literal) <$> nonSpecial
@@ -120,6 +123,14 @@ startOfLine = (A . \_ -> StartOfLine) <$> char '^'
 
 endOfLine :: Parser Matchable
 endOfLine = (A . \_ -> EndOfLine) <$> char '$'
+
+-- Unfortunate naming conflift with the parsing utilities.
+oneOrMore' :: Parser Matchable
+oneOrMore' = (Q . \_ -> OneOrMore) <$> (char '+')
+
+zeroOrOne' :: Parser Matchable
+zeroOrOne' = (Q . \_ -> ZeroOrOne) <$> (char '?')
+
 --
 ------------------------------------------------------------------------------------------------
 -- Main bit.
@@ -131,6 +142,8 @@ internal =  zeroOrMore
         <|> digit
         <|> posCharClass
         <|> negCharClass
+        <|> oneOrMore'
+        <|> zeroOrOne'
         <|> literal
     )
 
@@ -141,27 +154,13 @@ regex :: Parser [Matchable]
 regex =
   (++) <$> ((++) <$> (zeroOrOne startOfLine) <*> internal) <*> (zeroOrOne endOfLine)
 
-
--- regex :: Parser [Matchable]
--- regex =
-
---   (concat) <$> [
---     zeroOrOne startOfLine,
---     oneOrMore ( alphanumeric <|> digit <|> posCharClass <|> negCharClass <|> literal ),
---     zeroOrOne endOfLine
---   ]
-
-
-
-
-
 -- What happens if there are unparsed characters? 
 -- This probably means that the parsing is not implemented properly, but maybe maybe we need to 
 -- check here and return Nothing if there is something left?
 parsePattern :: String -> Maybe [Matchable]
 parsePattern pattern = fst <$> runParser regex pattern
 
--- Partial Function: Does not match anchors.
+-- Partial Function: Does not match anchors for example.
 consume :: Matchable -> Char -> Bool
 consume (E (Literal l)) c = l == c
 consume (E Digit) c = isDigit c
@@ -173,7 +172,11 @@ consumeAll :: [Matchable] -> String -> Bool
 consumeAll [A EndOfLine] "" = True
 consumeAll [A EndOfLine] _ = False
 consumeAll [] _ = True
-consumeAll e "" = False
+consumeAll m "" = False
+consumeAll (m : (Q ZeroOrOne) : mx) (s : sx) =
+  (consume m s && consumeAll mx sx) || (consumeAll mx (s : sx))
+consumeAll (m : (Q OneOrMore) : mx) (s : sx) = 
+  consume m s && consumeAll mx (dropWhile (consume m) sx)
 consumeAll (e : ex) (s : sx) = consume e s && consumeAll ex sx
 
 
