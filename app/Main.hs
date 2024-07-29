@@ -28,6 +28,10 @@ satisfy p = Parser f
 char :: Char -> Parser Char
 char c = satisfy (== c)
 
+-- A parser which accepts any character.
+anyChar :: Parser Char
+anyChar = satisfy (\_ -> True)
+
 first :: (a -> b) -> (a, c) -> (b, c)
 first f (x, y) = (f x, y)
 
@@ -58,41 +62,66 @@ oneOrMore p = (:) <$> p <*> zeroOrMore p
 -- Data types for regex elements. I have no idea what I'm doing with this, so hopefully it
 -- generalises well enough.
 --
-
 -- The special characters in our regex program are \d, \w, ^, $, [], +, *, . and |
-data Element = Literal Char
-             | Digit
+
+data Element
+  = Literal Char
+  | Digit
+  | AlphaNumeric
   deriving (Show)
 
-literal :: Parser Element
-literal = Parser f
-  where
-    f pattern
-      | null pattern = Nothing
-      | otherwise = Just (Literal $ head pattern, tail pattern)
+data CharClass
+  = PosCharClass [Char]
+  | NegCharClass [Char]
+  deriving (Show)
 
-digit :: Parser Element
-digit = Parser f
-  where
-    f pattern
-      | length pattern < 2 || take 2 pattern /= "\\d" = Nothing
-      | otherwise = Just (Digit, drop 2 pattern)
+data Matchable = E Element 
+               | C CharClass
+  deriving (Show)
+
+nonSpecial :: Parser Char
+nonSpecial = satisfy (\c -> c `notElem` "[]^$")
+
+literal :: Parser Matchable
+literal =  (E . Literal) <$> nonSpecial
+
+digit :: Parser Matchable
+digit = (E . \_ -> Digit) <$> (char '\\' *> char 'd')
+
+alphanumeric :: Parser Matchable
+alphanumeric = (E. \_ -> AlphaNumeric) <$> (char '\\' *> char 'w')
+
+posCharClass :: Parser Matchable
+posCharClass =  (C . PosCharClass) <$> (char '[' *> oneOrMore nonSpecial <* char ']')
+
+negCharClass :: Parser Matchable
+negCharClass = (C . NegCharClass) <$> (char '[' *> char '^' *> oneOrMore nonSpecial <* char ']')
 
 --
 ------------------------------------------------------------------------------------------------
 -- Main bit.
 
-regex :: Parser [Element]
-regex = oneOrMore (digit <|> literal)
+regex :: Parser [Matchable]
+regex =
+  oneOrMore
+    (  alphanumeric
+        <|> digit
+        <|> posCharClass
+        <|> negCharClass
+        <|> literal
+        )
 
-parsePattern :: String -> Maybe [Element]
+parsePattern :: String -> Maybe [Matchable]
 parsePattern pattern = fst <$> runParser regex pattern
 
-consume :: Element -> Char -> Bool
-consume (Literal l) c = l == c
-consume Digit c = isDigit c
+consume :: Matchable -> Char -> Bool
+consume (E (Literal l)) c = l == c
+consume (E Digit) c = isDigit c
+consume (E AlphaNumeric) c = isAlphaNum c
+consume (C (PosCharClass chars)) c = c `elem` chars
+consume (C (NegCharClass chars)) c = c `notElem` chars
 
-consumeAll :: [Element] -> String -> Bool
+consumeAll :: [Matchable] -> String -> Bool
 -- The empty pattern always matches.
 consumeAll [] _ = True
 -- A line here for the base case grep -e "^" ""
@@ -101,24 +130,10 @@ consumeAll [] _ = True
 consumeAll e "" = False
 consumeAll (e : ex) (s : sx) = consume e s && consumeAll ex sx
 
-
 matchPattern :: String -> String -> Bool
 matchPattern pattern input = case parsePattern pattern of
-  -- Just elements -> consumeAll elements input
   Just elements -> any (consumeAll elements) (tails input)
   Nothing -> error $ "Unhandled Pattern: " ++ pattern
-
-
--- matchPattern :: String -> String -> Bool
--- matchPattern pattern input
---   | length pattern == 1 = head pattern `elem` input
---   | pattern == "\\d" = any isDigit input
---   | pattern == "\\w" = any (\c -> isAlphaNum c || c == '_') input
---   | otherwise = error $ "Unhandled pattern: " ++ pattern
-
--- matchPattern :: String -> String -> Bool
--- matchPattern pattern input = True where
---   regex = runParser parseRegex pattern
 
 main :: IO ()
 main = do
