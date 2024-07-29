@@ -118,14 +118,15 @@ negCharClass = (C . NegCharClass) <$> (char '[' *> char '^' *> oneOrMore nonSpec
 startOfLine :: Parser Matchable
 startOfLine = (A . \_ -> StartOfLine) <$> char '^'
 
+endOfLine :: Parser Matchable
+endOfLine = (A . \_ -> EndOfLine) <$> char '$'
 --
 ------------------------------------------------------------------------------------------------
 -- Main bit.
 
-regex :: Parser [Matchable]
-regex =
-  (++) <$> (zeroOrOne startOfLine) <*>
-  zeroOrMore
+-- A regex that does not contain anchors.
+internal :: Parser [Matchable]
+internal =  zeroOrMore
     (  alphanumeric
         <|> digit
         <|> posCharClass
@@ -133,12 +134,34 @@ regex =
         <|> literal
     )
 
+
+
+-- Can we kill this horrible prefix operator notation?
+regex :: Parser [Matchable]
+regex =
+  (++) <$> ((++) <$> (zeroOrOne startOfLine) <*> internal) <*> (zeroOrOne endOfLine)
+
+
+-- regex :: Parser [Matchable]
+-- regex =
+
+--   (concat) <$> [
+--     zeroOrOne startOfLine,
+--     oneOrMore ( alphanumeric <|> digit <|> posCharClass <|> negCharClass <|> literal ),
+--     zeroOrOne endOfLine
+--   ]
+
+
+
+
+
 -- What happens if there are unparsed characters? 
 -- This probably means that the parsing is not implemented properly, but maybe maybe we need to 
 -- check here and return Nothing if there is something left?
 parsePattern :: String -> Maybe [Matchable]
 parsePattern pattern = fst <$> runParser regex pattern
 
+-- Partial Function: Does not match anchors.
 consume :: Matchable -> Char -> Bool
 consume (E (Literal l)) c = l == c
 consume (E Digit) c = isDigit c
@@ -147,6 +170,8 @@ consume (C (PosCharClass chars)) c = c `elem` chars
 consume (C (NegCharClass chars)) c = c `notElem` chars
 
 consumeAll :: [Matchable] -> String -> Bool
+consumeAll [A EndOfLine] "" = True
+consumeAll [A EndOfLine] _ = False
 consumeAll [] _ = True
 consumeAll e "" = False
 consumeAll (e : ex) (s : sx) = consume e s && consumeAll ex sx
