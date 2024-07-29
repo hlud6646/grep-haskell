@@ -73,6 +73,7 @@ data Element
   = Literal Char
   | Digit
   | AlphaNumeric
+  | WildCard
   deriving (Show)
 
 data CharClass
@@ -110,7 +111,7 @@ digit :: Parser Matchable
 digit = (E . \_ -> Digit) <$> (char '\\' *> char 'd')
 
 alphanumeric :: Parser Matchable
-alphanumeric = (E. \_ -> AlphaNumeric) <$> (char '\\' *> char 'w')
+alphanumeric = (E . \_ -> AlphaNumeric) <$> (char '\\' *> char 'w')
 
 posCharClass :: Parser Matchable
 posCharClass =  (C . PosCharClass) <$> (char '[' *> oneOrMore nonSpecial <* char ']')
@@ -131,6 +132,9 @@ oneOrMore' = (Q . \_ -> OneOrMore) <$> (char '+')
 zeroOrOne' :: Parser Matchable
 zeroOrOne' = (Q . \_ -> ZeroOrOne) <$> (char '?')
 
+wildcard :: Parser Matchable
+wildcard = (E . \_ -> WildCard) <$> (char '.')
+
 --
 ------------------------------------------------------------------------------------------------
 -- Main bit.
@@ -144,6 +148,7 @@ internal =  zeroOrMore
         <|> negCharClass
         <|> oneOrMore'
         <|> zeroOrOne'
+        <|> wildcard
         <|> literal
     )
 
@@ -165,6 +170,7 @@ consume :: Matchable -> Char -> Bool
 consume (E (Literal l)) c = l == c
 consume (E Digit) c = isDigit c
 consume (E AlphaNumeric) c = isAlphaNum c
+consume (E wildcard) c = True
 consume (C (PosCharClass chars)) c = c `elem` chars
 consume (C (NegCharClass chars)) c = c `notElem` chars
 
