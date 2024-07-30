@@ -7,7 +7,7 @@ import Control.Monad.Identity (Identity, join)
 import Data.Char (isAlphaNum, isDigit)
 import Data.List (tails, singleton, find)
 import Data.Void
-import Data.Maybe (isJust, listToMaybe)
+import Data.Maybe (isJust, listToMaybe, isNothing)
 import System.Environment
 import System.Exit
 import Text.Megaparsec
