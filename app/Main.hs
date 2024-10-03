@@ -25,7 +25,7 @@ data Pattern
   | Repeat Quantifier Pattern
   | Alternative Pattern Pattern
   | Capture Pattern
-  | BackRef Int
+  | Reference Int
   | Seq [Pattern]
   deriving (Eq, Show)
 
@@ -36,8 +36,9 @@ data Quantifier = ZeroOrOne | OneOrMore
 -- Parsec type parameters demystified: don't do anything fancy with erorrs, consume a String.
 type Parser = Parsec Void String
 
--- Extension: Parse escaped characters.
--- TODO: Should "\\" be in this list? I removed it to try and fix a weird behaviour in the tests.
+
+-- Don't delete me. Looks like low hanging fruit for a refactor but it is used
+-- in parsing character groups.
 regularChar :: Char -> Bool
 regularChar c = c `notElem` "$^+?[]|()."
 
@@ -51,25 +52,32 @@ regularChar c = c `notElem` "$^+?[]|()."
 pLiteral :: Parser Pattern
 pLiteral = Literal <$> satisfy regularChar <?> "non special character."
 
-pDigit :: Parser Pattern
-pDigit = Digit <$ chunk "\\d"
+pLeadingSlash :: Parser Pattern
+pLeadingSlash = do 
+  void $ char '\\'
+  maybeN <- optional (read <$> some (satisfy isDigit))
+  case maybeN of
+    Just n -> return $ Reference n
+    Nothing -> do 
+      c <- anySingle
+      case c of
+        'w' -> return $ AlphaNum
+        'd' -> return $ Digit
+        -- Escape a special character and return a literal.
 
-pAlphaNum :: Parser Pattern
-pAlphaNum = AlphaNum <$ chunk "\\w"
+pReference :: Parser Pattern 
+pReference = Reference <$> (char '\\' *> integer)
+  where integer = read <$> some (satisfy isDigit)
 
-pPosCharClass :: Parser Pattern
-pPosCharClass = do
-  void (char '[')
-  chars <- some (satisfy regularChar)
-  void (char ']')
-  return $ PosCharClass chars
-
-pNegCharClass :: Parser Pattern
-pNegCharClass = do
-  void (chunk "[^")
-  chars <- some (satisfy regularChar)
-  void (char ']')
-  return $ NegCharClass chars
+pCharClass :: Parser Pattern
+pCharClass = do 
+  void $ char '['
+  negation <- optional $ char '^'
+  chars <- some $ satisfy regularChar
+  void $ char ']'
+  case negation of 
+    Nothing -> return $ PosCharClass chars
+    _       -> return $ NegCharClass chars
 
 pStartAnchor :: Parser Pattern
 pStartAnchor = StartAnchor <$ char '^'
@@ -77,49 +85,20 @@ pStartAnchor = StartAnchor <$ char '^'
 pEndAnchor :: Parser Pattern
 pEndAnchor = EndAnchor <$ char '$'
 
-pZeroOrOne :: Parser Quantifier
-pZeroOrOne = ZeroOrOne <$ char '?'
-
-pOneOrMore :: Parser Quantifier
-pOneOrMore = OneOrMore <$ char '+'
-
 pQuantifier :: Parser Quantifier
-pQuantifier = pZeroOrOne <|> pOneOrMore
+pQuantifier = (ZeroOrOne <$ char '?') <|> (OneOrMore <$ char '+')
 
-pAlternative :: Parser Pattern
-pAlternative = do
-  void (char '(')
-  left <- pRegex
-  void (char '|')
-  right <- pRegex
-  void (char ')')
-  return $ Alternative left right
+pWildcard :: Parser Pattern
+pWildcard = Wildcard <$ char '.'
 
+-- Note: Alternatives are caught here too.
 pCapture :: Parser Pattern
-pCapture = do
-  void (char '(')
-  pattern <- pRegex
-  void (char ')')
-  return $ Capture pattern
-
-
-
--- Parsing something in barckets.
--- pDev :: Parser (String , String)
--- pDev = (,,,) <$> char '(' <*> pRegex <*> (optional ((char '|') *> pRegex)) <*> (char ')')
-pDev = do 
+pCapture = do 
   void $ char '('
   (left, maybeRight) <-(,) <$> pRegex <*> (optional ((char '|') *> pRegex)) <* (char ')')
   return $ case maybeRight of 
     Nothing -> Capture left
     Just right -> Capture (Alternative left right)
-
-pBackRef :: Parser Pattern 
-pBackRef = BackRef <$> (char '\\' *> integer)
-  where integer = read <$> some (satisfy isDigit)
-
-pWildCard :: Parser Pattern
-pWildCard = Wildcard <$ char '.'
 
 -- More involved parsers.
 -- The full regex parser is built up in stages:
@@ -131,14 +110,11 @@ pWildCard = Wildcard <$ char '.'
 pUnquantified :: Parser Pattern
 pUnquantified =
   choice
-    [ pDigit,
-      pAlphaNum,
-      pNegCharClass,
-      pPosCharClass,
+      [pCharClass,
       pEndAnchor,
-      pDev,
-      pWildCard,
-      pBackRef,
+      pCapture,
+      pWildcard,
+      pLeadingSlash,
       pLiteral
     ]
 
@@ -165,43 +141,6 @@ pRegex = unpackSeq <$> anchored
   where
     anchored = absorbPrefix <$> optional pStartAnchor <*> many pTerm
 
--- Matching an Input against a Pattern.
-consume :: Pattern -> String -> Maybe String
-consume Empty s = Just s
-consume Wildcard "" = Nothing
-consume Wildcard (s : sx) = Just sx
-consume EndAnchor s = if null s then Just "" else Nothing
-consume (Literal _) "" = Nothing
-consume (Literal c) (s : sx) = if c == s then Just sx else Nothing
-consume Digit "" = Nothing
-consume Digit (s : sx) = if isDigit s then Just sx else Nothing
-consume AlphaNum "" = Nothing
-consume AlphaNum (s : sx) = if isAlphaNum s then Just sx else Nothing
-consume (PosCharClass cx) "" = Nothing
-consume (PosCharClass cx) (s : sx) = if s `elem` cx then Just sx else Nothing
-consume (NegCharClass cx) "" = Nothing
-consume (NegCharClass cx) (s : sx) = if s `notElem` cx then Just sx else Nothing
-consume (Repeat OneOrMore p) s = do
-  sx <- consume p s
-  return $ dropWhile (isJust . consume p . singleton) sx
-consume (Repeat ZeroOrOne p) s = if isNothing match then Just s else match
-  where
-    match = consume p s
-consume (Seq []) s = Just s
-consume (Seq [p]) s = consume p s
-consume (Seq (p : px)) s = do
-  sx <- consume p s
-  consume (Seq px) sx
-consume (Alternative left right) s = case consume left s of
-  Just sx -> Just sx
-  Nothing -> consume right s
-
-
-
-
-
-
-
 -- | Given a regular expression, some input and a list of captures, optionally
 -- return a tuple holding the matched part, the remainder of the string and 
 -- a list of captures.
@@ -227,12 +166,9 @@ f (PosCharClass chars) (s : sx) captures =
 f (NegCharClass chars) "" _ = Nothing
 f (NegCharClass chars) (s : sx) captures = 
   if s `notElem` chars then Just ([s], sx, captures) else Nothing
--- This one is a bit horrible.
--- TODO: Fix it. Currently, if the pattern matches exactly once the match will fail. This is wrong!
 
-
-
-
+-- TODO: Better names for things
+-- This is not efficient as it checks shorter matches over and over.
 f (Repeat OneOrMore pattern) input captures = do
   -- If you have a pattern p, the repetitions of p are 
   -- p, Seq [p, p], Seq [p, p, p] ...
@@ -241,11 +177,6 @@ f (Repeat OneOrMore pattern) input captures = do
   (a, b, c) <- join . safeHead $ reverse (takeWhile isJust bar)
   return $ (a, b, captures)
 
-
-
-
-
- 
 f (Repeat ZeroOrOne pattern) input captures = 
   if isNothing match then Just ("", input, captures) else match
     where match = f pattern input captures
@@ -259,30 +190,23 @@ f (Alternative left right) input captures = case f left input captures of
   Just x -> Just x
   Nothing -> f right input captures
 
-
 f (Capture pattern) input captures = do 
   (consumed, remaining, captures') <- f pattern input captures
   return $ (consumed, remaining, captures' ++ [consumed])
 
-f (BackRef n) input captures = 
-  if capture `isPrefixOf` input then Just (capture, drop (length capture) input, captures) else Nothing
+f (Reference n) input captures = 
+  if capture `isPrefixOf` input 
+  then Just (capture, drop (length capture) input, captures) 
+  else Nothing
   where capture = (captures !! (n - 1))
-
-
-
-
-
-
-
-
-  
-  
 
 matchPattern :: String -> String -> Bool
 matchPattern pattern input = isJust $ do
   case parse pRegex "<stdin>" pattern of
     Left bundle -> Nothing
+    -- If the pattern begins with a start anchor, then you must match from the stat of the string.
     Right (Seq (StartAnchor : patterns)) -> f (Seq patterns) input []
+    -- Otherwise, you can try to match the pattern starting anywhere.
     Right result -> join $ find isJust (map (\i -> f result i []) (tails input))
 
 
@@ -305,4 +229,21 @@ main = do
 safeHead :: [a] -> Maybe a
 safeHead [] = Nothing
 safeHead x = Just (head x)
+
+
+-- A nested backref means a ref inside a capture.
+-- Need to do a pass over the AST and convert any captures/backrefs to standard regex.
+
+
+
+-- First put the captures in order, according to the order than they are encountered
+-- when reading the pattern left to right.
+g :: Pattern -> [Pattern]
+-- If the first element is a capture, this capture is part of the return value.
+g (Seq (Capture p : px)) = Capture p : g p ++ g (Seq px)
+-- If the first element is not a capture, ignore it.
+g (Seq (p : px)) = g (Seq px)
+g (Seq _) = []
+g _ = []
+
 
